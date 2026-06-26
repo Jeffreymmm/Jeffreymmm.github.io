@@ -36,10 +36,10 @@ function pad(n) { return n < 10 ? '0' + n : '' + n }
 function seed() {
   const now = new Date()
   const profile = {
-    name: '小陈',
+    name: '小王',
     greeting: '继续加油',
-    city: '北京',
-    age: 28,
+    city: '深圳',
+    age: 29,
     income: 25000,
     savings: 150000,
     housePrice: 3200000,
