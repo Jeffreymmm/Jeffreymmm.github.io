@@ -97,4 +97,80 @@ function healthLevel(mortgagePct) {
   return { label: '稳健', color: 'success' }
 }
 
-export default { fmt, fmtFull, monthlyMortgage, timeToSave, babyCosts, plannerSummary, healthLevel }
+/**
+ * 生娃节点规划（纯函数，三端通用）
+ * 回答：「按当前节奏，多久能攒够生娃启动资金、是否赶上计划」
+ * profile=用户参数 babyBalance=育儿账户当前余额 babyMonthlySave=每月育儿储蓄
+ */
+function babyPlan(profile, babyBalance, babyMonthlySave) {
+  const p = profile || {}
+  const income = +p.income || 0
+  const age = +p.age || 0
+  const investReturn = +p.investReturn || 0
+  const babyYear = +p.babyYear || 0
+  // 育儿成本（复用 babyCosts，一次取值）
+  const baby = babyCosts(+p.cityFactor || 1, +p.babyTier || 1)
+  // 产后收入缓冲：产假期间收入中断/下降，预留数月生活费
+  const bufferMonths = 6              // 缓冲月数
+  const bufferRate = 0.6              // 按月收入的 60% 估（基本生活费 + 收入缺口）
+  const buffer = income * bufferRate * bufferMonths
+  // 生娃启动资金门槛 = 首年育儿支出(含孕产) + 产后收入缓冲
+  const launchTarget = baby.firstYear + buffer
+  // 攒够启动资金所需年数（复用 timeToSave）
+  const yearsToReady = timeToSave(launchTarget, +babyBalance || 0, +babyMonthlySave || 0, investReturn)
+  return {
+    launchTarget,
+    firstYear: baby.firstYear,
+    buffer,
+    yearsToReady,
+    readyAge: age + yearsToReady,
+    gap: yearsToReady - babyYear,
+    status: yearsToReady <= babyYear ? 'onTrack' : 'late',  // 计划内就绪 / 落后计划
+    monthlyAvg: baby.monthlyAvg
+  }
+}
+
+/**
+ * 买房 vs 生娃 先后顺序建议（纯函数，三端通用）
+ * 核心判断依据：生娃有生理年龄窗口、买房可延后；兼顾购房后现金流能否叠加育儿。
+ * baby=babyPlan 结果 summary=plannerSummary 结果 profile=用户参数
+ */
+function milestoneOrder(baby, summary, profile) {
+  const p = profile || {}
+  const income = +p.income || 0
+  const b = baby || {}
+  const s = summary || {}
+  const houseAge = +s.houseAge || 0
+  const readyAge = +b.readyAge || 0
+  const primeAge = 35              // 生娃适龄窗口参考（岁）
+  const cashflowCap = 55           // 月供+育儿占月收入的健康上限(%)
+  const fmtAge = n => n.toFixed(0)
+
+  // 生娃后月度现金流：月供 + 育儿月均支出
+  const postExpense = (+s.mortgage || 0) + (+b.monthlyAvg || 0)
+  const postPct = income > 0 ? postExpense / income * 100 : 0
+  const postHealth = healthLevel(postPct)
+  // 购房后月供叠加育儿月支出的合计占比
+  const stackedPct = (+s.mortgagePct || 0) + (income > 0 ? (+b.monthlyAvg || 0) / income * 100 : 0)
+
+  let order, reason
+  if (Math.abs(houseAge - readyAge) <= 1) {
+    order = 'parallel'
+    reason = '购房与生娃资金就绪时间接近（' + fmtAge(readyAge) + ' 岁与 ' + fmtAge(houseAge) + ' 岁相差不超过 1 年），建议每月储蓄在首付与育儿间按约 6:4 分配、同步推进。'
+  } else if (readyAge + 1 <= houseAge && readyAge <= primeAge) {
+    order = 'babyFirst'
+    reason = '生娃资金 ' + fmtAge(readyAge) + ' 岁就绪，比购房（' + fmtAge(houseAge) + ' 岁）早 ' + fmtAge(houseAge - readyAge) + ' 年，且在 ' + primeAge + ' 岁适龄窗口内。生娃有生理节奏，建议先启动生育计划，购房可延后。'
+  } else if (houseAge <= readyAge && stackedPct <= cashflowCap) {
+    order = 'buyFirst'
+    reason = '购房（' + fmtAge(houseAge) + ' 岁）早于生娃就绪（' + fmtAge(readyAge) + ' 岁），且购房后月供叠加育儿仅占收入 ' + stackedPct.toFixed(0) + '%，建议先安居再从容备孕。'
+  } else if (postPct > cashflowCap) {
+    order = 'babyFirst'
+    reason = '若同时承担月供与育儿，月支出占收入 ' + postPct.toFixed(0) + '% 偏高。建议先生娃（育儿支出可阶段性控制），购房延后至现金流更宽裕。'
+  } else {
+    order = 'buyFirst'
+    reason = '当前现金流可支撑，建议按你更看重的优先级推进；先购房能锁定居住成本，再备孕。'
+  }
+  return { order, reason, postExpense, postPct, postHealth }
+}
+
+export default { fmt, fmtFull, monthlyMortgage, timeToSave, babyCosts, plannerSummary, healthLevel, babyPlan, milestoneOrder }

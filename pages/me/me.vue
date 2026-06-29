@@ -46,23 +46,27 @@
           <view class="num-row"><text class="prefix">¥</text><input class="num-input" type="number" v-model.number="form.monthlyTarget" /></view>
         </view>
         <view class="field">
+          <text class="field-label">育儿储备目标</text>
+          <view class="num-row"><text class="prefix">¥</text><input class="num-input" type="number" v-model.number="form.babyTarget" /></view>
+        </view>
+        <view class="field">
           <text class="field-label">应急储备目标</text>
           <view class="num-row"><text class="prefix">¥</text><input class="num-input" type="number" v-model.number="form.emergencyTarget" /></view>
         </view>
       </view>
 
-      <!-- 账户余额（编辑初始值，当前余额 = 初始 + 打卡累计）-->
+      <!-- 账户余额（直接编辑当前持有金额，保存时反算初始值，保持单一数据源）-->
       <view class="card">
-        <text class="card-title">账户初始余额</text>
-        <text class="card-sub">当前余额 = 初始 + 该账户打卡累计</text>
+        <text class="card-title">账户余额</text>
+        <text class="card-sub">设置各账户当前持有金额，目标完成度按此计算</text>
         <view class="acct-row" v-for="a in accounts" :key="a.id">
           <view class="acct-dot" :style="{ background: colorVar(a.color) }"></view>
           <view class="acct-info">
             <text class="acct-name">{{ a.name }}</text>
-            <text class="acct-bal font-num">当前余额 {{ fmtFull(acctBalance(a.id)) }}</text>
+            <text class="acct-bal font-num">已打卡累计 {{ fmtFull(a.checkinSum) }}</text>
           </view>
           <view class="acct-input">
-            <input class="num-input acct-num" type="number" v-model.number="a.opening" />
+            <input class="num-input acct-num" type="number" v-model.number="a.balance" />
           </view>
         </view>
       </view>
@@ -79,12 +83,35 @@
         <view class="dm-tip">数据均保存在本机（离线），重置后恢复演示种子数据。</view>
       </view>
 
+      <!-- 云同步 -->
+      <view class="card">
+        <text class="card-title">云同步</text>
+        <view class="dm-row" @click="openSyncSheet">
+          <text class="dm-name-normal">同步设置</text>
+          <text class="dm-arrow">›</text>
+        </view>
+        <view class="dm-row" @click="uploadCloud">
+          <text class="dm-name-normal">上传到云端</text>
+          <text class="dm-arrow">›</text>
+        </view>
+        <view class="dm-row" @click="downloadCloud">
+          <text class="dm-name-normal">从云端恢复</text>
+          <text class="dm-arrow">›</text>
+        </view>
+        <view class="dm-row" @click="clearCloud">
+          <text class="dm-name">清除云端配置</text>
+          <text class="dm-arrow">›</text>
+        </view>
+        <view class="dm-tip">通过 GitHub Gist 跨设备同步。Token 仅本地存储，请勿在公共设备保留。</view>
+      </view>
+
       <view class="about">人生规划器 v1.0.0 · 数据本地存储</view>
       <view style="height: 180rpx"></view>
     </view>
 
     <bottom-nav active="me" @checkin="sheet = true" />
     <checkin-sheet :visible="sheet" @close="sheet = false" @saved="sheet = false" />
+    <sync-sheet :visible="syncSheet" @close="syncSheet = false" @saved="onSyncSaved" />
   </view>
 </template>
 
@@ -93,13 +120,16 @@ import db from '../../store/db.js'
 import calc from '../../utils/calc.js'
 import BottomNav from '../../components/bottom-nav.vue'
 import CheckinSheet from '../../components/checkin-sheet.vue'
+import cloud from '../../store/cloud.js'
+import SyncSheet from '../../components/sync-sheet.vue'
 
 export default {
-  components: { BottomNav, CheckinSheet },
+  components: { BottomNav, CheckinSheet, SyncSheet },
   data() {
     return {
       statusBarHeight: 20,
       sheet: false,
+      syncSheet: false,
       form: {},
       accounts: []
     }
@@ -109,15 +139,27 @@ export default {
   },
   onShow() {
     this.form = Object.assign({}, db.getProfile())
-    this.accounts = db.getAccounts().map(a => Object.assign({}, a))
+    this.loadAccounts()
   },
   methods: {
     fmtFull: calc.fmtFull,
     colorVar: db.colorVar,
-    acctBalance(id) { return db.accountBalance(id) },
+    // 加载账户并附加当前持有(balance)与打卡累计(checkinSum)，用于直接编辑持有金额
+    loadAccounts() {
+      this.accounts = db.getAccounts().map(a => {
+        const opening = +a.opening || 0
+        const balance = db.accountBalance(a.id)
+        return Object.assign({}, a, { opening, balance, checkinSum: balance - opening })
+      })
+    },
     save() {
       db.saveProfile(this.form)
-      db.saveAccounts(this.accounts.map(a => ({ id: a.id, name: a.name, opening: +a.opening || 0, color: a.color })))
+      // 持有金额反算为初始值，维持"当前余额 = 初始 + 打卡累计"的单一数据源
+      db.saveAccounts(this.accounts.map(a => ({
+        id: a.id, name: a.name, color: a.color,
+        opening: (+a.balance || 0) - (a.checkinSum || 0)
+      })))
+      this.loadAccounts()
       uni.showToast({ title: '已保存', icon: 'success' })
     },
     reset() {
@@ -129,11 +171,78 @@ export default {
           if (r.confirm) {
             db.resetData()
             this.form = Object.assign({}, db.getProfile())
-            this.accounts = db.getAccounts().map(a => Object.assign({}, a))
+            this.loadAccounts()
             uni.showToast({ title: '已重置', icon: 'success' })
           }
         }
       })
+    },
+    // ===== 云同步 =====
+    openSyncSheet() { this.syncSheet = true },
+    onSyncSaved() { this.syncSheet = false },
+    // 重读本机数据（云恢复后刷新当前页展示）
+    refreshFromDb() {
+      this.form = Object.assign({}, db.getProfile())
+      this.loadAccounts()
+    },
+    uploadCloud() {
+      if (!cloud.hasToken()) {
+        uni.showToast({ title: '请先配置同步', icon: 'none' })
+        this.syncSheet = true
+        return
+      }
+      uni.showLoading({ title: '上传中...', mask: true })
+      cloud.push().then(() => {
+        uni.hideLoading()
+        uni.showToast({ title: '已上传', icon: 'success' })
+      }).catch(e => {
+        uni.hideLoading()
+        this.showCloudError(e)
+      })
+    },
+    downloadCloud() {
+      if (!cloud.hasToken()) {
+        uni.showToast({ title: '请先配置同步', icon: 'none' })
+        this.syncSheet = true
+        return
+      }
+      uni.showModal({
+        title: '从云端恢复',
+        content: '将用云端数据覆盖本机，确定？',
+        confirmColor: '#e5484d',
+        success: r => {
+          if (!r.confirm) return
+          uni.showLoading({ title: '同步中...', mask: true })
+          cloud.restoreFromCloud(true).then(res => {
+            uni.hideLoading()
+            if (res && res.restored) {
+              this.refreshFromDb()
+              uni.showToast({ title: '已恢复', icon: 'success' })
+            } else {
+              uni.showToast({ title: '云端无更新', icon: 'none' })
+            }
+          }).catch(e => {
+            uni.hideLoading()
+            this.showCloudError(e)
+          })
+        }
+      })
+    },
+    clearCloud() {
+      uni.showModal({
+        title: '清除配置',
+        content: '仅清除本机同步配置（Token 等），不影响已上传的云端数据，确定？',
+        confirmColor: '#e5484d',
+        success: r => {
+          if (r.confirm) {
+            cloud.clearConfig()
+            uni.showToast({ title: '已清除', icon: 'success' })
+          }
+        }
+      })
+    },
+    showCloudError(e) {
+      uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
     }
   }
 }
@@ -180,6 +289,7 @@ export default {
 
 .dm-row { display: flex; justify-content: space-between; align-items: center; padding: 20rpx 0; }
 .dm-name { font-size: 28rpx; font-weight: 600; color: var(--danger); }
+.dm-name-normal { font-size: 28rpx; font-weight: 600; color: var(--fg-strong); }
 .dm-arrow { font-size: 36rpx; color: var(--muted-2); }
 .dm-tip { font-size: 22rpx; color: var(--muted); line-height: 1.5; }
 

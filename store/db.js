@@ -14,6 +14,9 @@ import calc from '../utils/calc.js'
 const KEY = 'life_planner_data_v1'
 let cache = null
 
+// 写事件订阅：cloud.js 订阅以实现"写后自动上传"（cloud 单向依赖 db，避免循环引用）
+const listeners = []
+
 /* ============ 持久化 ============ */
 function load() {
   if (cache) return cache
@@ -29,6 +32,22 @@ function load() {
 }
 function save() {
   try { uni.setStorageSync(KEY, cache) } catch (e) { console.warn('保存失败', e) }
+  emitChange()
+}
+
+/* ============ 写事件订阅（供云端同步层自动上传）============ */
+function emitChange() {
+  for (let i = 0; i < listeners.length; i++) {
+    try { listeners[i]() } catch (e) { console.warn(e) }
+  }
+}
+/** 订阅写事件，返回取消订阅函数 */
+function onChange(fn) {
+  listeners.push(fn)
+  return () => {
+    const i = listeners.indexOf(fn)
+    if (i >= 0) listeners.splice(i, 1)
+  }
 }
 
 /* ============ 种子数据（按"今天"动态生成最近 6 个月）============ */
@@ -52,7 +71,9 @@ function seed() {
     investReturn: 3,
     babyTier: 1.0,
     monthlyTarget: 8000,
-    emergencyTarget: 60000
+    babyTarget: 130000,
+    emergencyTarget: 60000,
+    babySave: 1500
   }
   const accounts = [
     { id: 'down', name: '首付账户', opening: 126000, color: 'accent' },
@@ -102,6 +123,36 @@ function deleteCheckin(id) {
   save()
 }
 function resetData() { cache = seed(); save(); return cache }
+
+/* ============ 快照导入导出（云端同步用）============ */
+/**
+ * 导出全量快照（云端同步上传内容）。
+ * 用显式字段映射而非整体深拷贝：history() 会原地给 checkins 写入派生字段 _bal，
+ * 显式映射结构上杜绝把派生值带进云端，严守单一数据源不变量。
+ * version 为云端快照格式版本，独立于本地存储 KEY。
+ */
+function getSnapshot() {
+  return {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    profile: Object.assign({}, cache.profile),
+    accounts: cache.accounts.map(a => ({ id: a.id, name: a.name, opening: a.opening, color: a.color })),
+    checkins: cache.checkins.map(c => ({ id: c.id, date: c.date, account: c.account, amount: c.amount, category: c.category, note: c.note }))
+  }
+}
+/**
+ * 从快照整体恢复（云端拉取后写回）。
+ * 宽松形状校验 + 剥离未知字段，复用 resetData 的"整体替换 cache + 落盘"范式。
+ */
+function restoreSnapshot(data) {
+  if (!data || typeof data !== 'object') throw new Error('快照格式无效')
+  const profile = (data.profile && typeof data.profile === 'object') ? data.profile : {}
+  const accounts = Array.isArray(data.accounts) ? data.accounts.filter(a => a && a.id) : []
+  const checkins = Array.isArray(data.checkins) ? data.checkins.filter(c => c && c.id && c.date) : []
+  cache = { profile, accounts, checkins }
+  save()
+  return cache
+}
 
 /* ============ 派生计算 ============ */
 function accountBalance(id) {
@@ -171,7 +222,7 @@ function goals() {
   const nowY = new Date().getFullYear()
   return [
     { id: 'down', name: '购房首付', target: sum.downAmt || 960000, account: 'down', year: nowY + Math.ceil(sum.timeToSave || 0), color: 'accent' },
-    { id: 'baby', name: '育儿储备金', target: sum.babyTotal || 130000, account: 'baby', year: null, color: 'warm' },
+    { id: 'baby', name: '育儿储备金', target: +p.babyTarget || sum.babyTotal || 130000, account: 'baby', year: nowY + Math.ceil(calc.babyPlan(p, accountBalance('baby'), +p.babySave || 1500).yearsToReady), color: 'warm' },
     { id: 'emergency', name: '应急储备金', target: +p.emergencyTarget || 60000, account: 'emergency', year: null, color: 'success' }
   ]
 }
@@ -240,6 +291,7 @@ export default {
   getProfile, saveProfile,
   getAccounts, saveAccounts,
   getCheckins, addCheckin, deleteCheckin,
+  getSnapshot, restoreSnapshot, onChange,
   accountBalance, netWorth, monthTotal, yearTotal, avgMonthly,
   monthlyStatus, currentStreak, goals, goalProgress,
   netWorthSeries, latestAllocation, history, colorVar

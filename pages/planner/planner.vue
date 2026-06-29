@@ -120,6 +120,66 @@
         </view>
       </view>
 
+      <!-- 生娃规划 -->
+      <view class="card">
+        <view class="card-title">生娃规划</view>
+        <view class="card-sub">攒够启动资金即可执行生育计划</view>
+
+        <!-- 启动资金门槛 -->
+        <view class="baby-launch">
+          <view class="baby-launch-main">
+            <text class="baby-launch-label">生娃启动资金</text>
+            <text class="baby-launch-val font-num">{{ fmt(baby.launchTarget) }}<text class="u">元</text></text>
+          </view>
+          <view class="baby-launch-break">
+            <text>首年育儿 {{ fmt(baby.firstYear) }}</text>
+            <text>＋ 产后缓冲 {{ fmt(baby.buffer) }}</text>
+          </view>
+        </view>
+
+        <!-- 每月育儿储蓄 -->
+        <view class="slider-field">
+          <view class="slider-head"><text>每月育儿储蓄</text><text class="slider-val">{{ fmtFull(form.babySave) }} 元</text></view>
+          <slider :min="500" :max="8000" :step="500" :value="form.babySave" @changing="form.babySave = $event.detail.value" />
+        </view>
+
+        <!-- 三指标 -->
+        <view class="baby-metrics">
+          <view class="baby-metric hl">
+            <text class="m-label">资金就绪</text>
+            <text class="m-value font-num">{{ baby.yearsToReady.toFixed(1) }}<text class="u">年</text></text>
+          </view>
+          <view class="baby-metric">
+            <text class="m-label">计划生娃</text>
+            <text class="m-value font-num">{{ form.babyYear }}<text class="u">年后</text></text>
+          </view>
+          <view class="baby-metric">
+            <text class="m-label">就绪年龄</text>
+            <text class="m-value font-num">{{ baby.readyAge.toFixed(0) }}<text class="u">岁</text></text>
+          </view>
+        </view>
+
+        <!-- 状态横幅 -->
+        <view class="insight" :class="baby.status === 'onTrack' ? 'ok' : 'warn'">
+          <text class="insight-icon">{{ baby.status === 'onTrack' ? '✓' : '⚠️' }}</text>
+          <text class="insight-text">{{ babyInsight }}</text>
+        </view>
+
+        <!-- 买房 vs 生娃 顺序建议 -->
+        <view class="baby-order">
+          <view class="baby-order-head">
+            <text class="bo-tag" :class="order.order">{{ orderLabel }}</text>
+            <text class="bo-title">买房 · 生娃 顺序建议</text>
+          </view>
+          <text class="bo-reason">{{ order.reason }}</text>
+          <view class="bo-cashflow">
+            <text class="bo-cf-label">生娃后月度现金流</text>
+            <text class="bo-cf-val font-num">月供+育儿 {{ fmtFull(order.postExpense) }} 元 · 占收入 {{ order.postPct.toFixed(0) }}%</text>
+            <text class="bo-cf-health" :style="{ color: 'var(--' + order.postHealth.color + ')' }">{{ order.postHealth.label }}</text>
+          </view>
+        </view>
+      </view>
+
       <!-- 场景对比 -->
       <view class="card">
         <view class="card-title">首付策略对比</view>
@@ -183,6 +243,22 @@ export default {
   computed: {
     summary() {
       return calc.plannerSummary(this.form, +this.form.savings || 0)
+    },
+    baby() {
+      return calc.babyPlan(this.form, db.accountBalance('baby'), +this.form.babySave || 1500)
+    },
+    order() {
+      return calc.milestoneOrder(this.baby, this.summary, this.form)
+    },
+    babyInsight() {
+      const b = this.baby
+      if (b.status === 'onTrack') {
+        return '资金在计划内就绪，预计 ' + b.readyAge.toFixed(0) + ' 岁可启动生育计划，节奏从容。'
+      }
+      return '按当前月存节奏，资金落后计划 ' + b.gap.toFixed(1) + ' 年才就绪（' + b.readyAge.toFixed(0) + ' 岁）。建议加码每月育儿储蓄，或把计划顺延 ' + Math.ceil(b.gap) + ' 年。'
+    },
+    orderLabel() {
+      return { babyFirst: '先生后买', buyFirst: '先买后生', parallel: '同步推进' }[this.order.order] || ''
     },
     yearsLabels() { return this.yearsOptions.map(y => y + '年') },
     yearsIndex() { return Math.max(0, this.yearsOptions.indexOf(+this.form.years)) },
@@ -315,4 +391,31 @@ export default {
 .tl-age { display: block; font-size: 24rpx; font-weight: 700; color: var(--muted); }
 .tl-event { display: block; font-size: 30rpx; font-weight: 700; color: var(--fg-strong); }
 .tl-amt { display: block; font-size: 24rpx; color: var(--muted); margin-top: 4rpx; }
+
+/* 生娃规划 */
+.baby-launch { background: var(--warm-soft); border-radius: 24rpx; padding: 28rpx; margin-bottom: 28rpx; }
+.baby-launch-main { display: flex; justify-content: space-between; align-items: baseline; }
+.baby-launch-label { font-size: 26rpx; color: var(--muted); font-weight: 600; }
+.baby-launch-val { font-size: 48rpx; font-weight: 800; color: var(--warm); }
+.baby-launch-val .u { font-size: 24rpx; color: var(--muted); margin-left: 2rpx; }
+.baby-launch-break { display: flex; gap: 24rpx; margin-top: 12rpx; font-size: 24rpx; color: var(--muted); }
+
+.baby-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16rpx; margin: 8rpx 0 24rpx; }
+.baby-metric { background: var(--surface-2); border-radius: 20rpx; padding: 24rpx 16rpx; border: 2rpx solid var(--border); text-align: center; }
+.baby-metric.hl { background: var(--warm-soft); border-color: var(--warm-light); }
+.baby-metric .m-label { display: block; font-size: 22rpx; color: var(--muted); font-weight: 600; }
+.baby-metric .m-value { display: block; font-size: 36rpx; font-weight: 800; color: var(--fg-strong); margin-top: 8rpx; }
+.baby-metric .m-value .u { font-size: 22rpx; color: var(--muted); }
+
+.baby-order { border: 3rpx solid var(--border); border-radius: 24rpx; padding: 28rpx; margin-top: 24rpx; }
+.baby-order-head { display: flex; align-items: center; gap: 16rpx; margin-bottom: 16rpx; }
+.bo-tag { font-size: 24rpx; font-weight: 800; color: #fff; background: var(--warm); padding: 6rpx 20rpx; border-radius: 999rpx; }
+.bo-tag.buyFirst { background: var(--accent); }
+.bo-tag.parallel { background: var(--info); }
+.bo-title { font-size: 28rpx; font-weight: 700; color: var(--fg-strong); }
+.bo-reason { display: block; font-size: 26rpx; line-height: 1.5; color: var(--fg); }
+.bo-cashflow { display: flex; align-items: center; gap: 12rpx; flex-wrap: wrap; margin-top: 20rpx; padding-top: 20rpx; border-top: 2rpx solid var(--border); font-size: 24rpx; }
+.bo-cf-label { color: var(--muted); }
+.bo-cf-val { color: var(--fg-strong); font-weight: 700; }
+.bo-cf-health { font-weight: 800; }
 </style>

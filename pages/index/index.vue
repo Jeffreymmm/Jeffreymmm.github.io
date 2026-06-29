@@ -76,7 +76,10 @@
 
       <!-- 三大里程碑 -->
       <view class="card">
-        <view class="card-title">三大里程碑</view>
+        <view class="card-title-row">
+          <view class="card-title">三大里程碑</view>
+          <text class="manage-link" @click="go('/pages/me/me')">管理目标 ›</text>
+        </view>
         <view class="card-sub">资金累积进度</view>
         <view class="goal" v-for="g in goals" :key="g.id">
           <view class="goal-ico" :style="{ background: soft(g.color), color: colorVar(g.color) }">{{ goalEmoji(g.color) }}</view>
@@ -220,7 +223,11 @@ export default {
     try {
       this.statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
     } catch (e) {}
+    uni.$on('lp:data-restored', this.onDataRestored)
     this.refresh()
+  },
+  onUnload() {
+    uni.$off('lp:data-restored', this.onDataRestored)
   },
   onShow() { this.refresh() },
   methods: {
@@ -234,6 +241,8 @@ export default {
     go(url) { uni.reLaunch({ url }) },
     openSheet() { this.sheet = true },
     onSaved() { this.sheet = false; this.refresh() },
+    // 云端恢复后（启动自动拉取/他机同步）刷新首页汇总
+    onDataRestored() { this.refresh() },
     refresh() {
       this.profile = db.getProfile()
       this.name = this.profile.name || '我'
@@ -359,6 +368,8 @@ export default {
 }
 .card-title { font-size: 32rpx; font-weight: 800; color: var(--fg-strong); }
 .card-sub { font-size: 24rpx; color: var(--muted); margin-top: 4rpx; margin-bottom: 32rpx; }
+.card-title-row { display: flex; justify-content: space-between; align-items: center; }
+.manage-link { font-size: 24rpx; font-weight: 700; color: var(--accent); }
 
 /* 首付进度环 */
 .ring-row { display: flex; align-items: center; gap: 40rpx; }

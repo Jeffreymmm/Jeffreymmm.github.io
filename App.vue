@@ -1,7 +1,15 @@
 <script>
+import cloud from './store/cloud.js'
+
 export default {
   onLaunch() {
-    // 全局初始化占位（数据已在 main.js 中加载）
+    // 数据已在 main.js 同步加载（保证秒开）；此处异步启用云端同步，不阻塞首屏
+    try {
+      cloud.startAutoPush()    // 注册写后自动上传
+      cloud.autoSyncOnLaunch() // 已配置则静默拉取云端较新数据
+    } catch (e) {
+      console.warn('启动同步初始化失败', e)
+    }
   },
   onShow() {},
   onHide() {}
