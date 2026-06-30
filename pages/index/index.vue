@@ -18,7 +18,8 @@
         <view class="nw-glow"></view>
         <view class="nw-label">总净资产</view>
         <view class="nw-value font-num">{{ fmtFull(netWorth) }}<text class="nw-unit">元</text></view>
-        <view class="nw-delta">↑ 本月 +{{ fmtFull(monthTotal) }} · {{ health }}</view>
+        <view class="nw-delta" v-if="monthTotal > 0">↑ 本月 +{{ fmtFull(monthTotal) }}</view>
+        <view class="nw-delta" v-else>本月暂无打卡</view>
         <view class="nw-alloc">
           <view class="nw-alloc-item" v-for="a in allocs" :key="a.id">
             <view class="nw-alloc-label">{{ a.name }}</view>
@@ -48,7 +49,7 @@
       </view>
 
       <!-- 连续达标横幅 -->
-      <view class="streak">
+      <view class="streak" v-if="streak > 0">
         <text class="streak-emoji">🔥</text>
         <view class="streak-info">
           <view class="streak-head">连续 {{ streak }} 个月达标！</view>
@@ -68,7 +69,7 @@
           </progress-ring>
           <view class="ring-info">
             <view class="ring-amount font-num">{{ fmtFull(downBalance) }}<text class="ring-amt-unit"> / {{ fmt(downTarget) }}</text></view>
-            <view class="ring-break">月存 {{ fmtFull(profile.income * profile.saveRate / 100) }} 元</view>
+            <view class="ring-break">月存 {{ fmtFull(profile.income * profile.saveRate / 100) }} 元 · 月供 {{ health }}</view>
             <view class="ring-eta">⏱ 预计 {{ downEta.toFixed(1) }} 年后达标</view>
           </view>
         </view>
@@ -113,7 +114,10 @@
 
       <!-- 快速模拟器 -->
       <view class="card">
-        <view class="card-title">快速模拟器</view>
+        <view class="card-title-row">
+          <view class="card-title">快速模拟器</view>
+          <text class="manage-link" @click="go('/pages/planner/planner')">去规划页 ›</text>
+        </view>
         <view class="card-sub">调整参数即时看结果</view>
 
         <view class="sim-row">
@@ -223,6 +227,11 @@ export default {
     try {
       this.statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20
     } catch (e) {}
+    // 首次进入：从真实参数回填模拟器初值（refresh 不覆盖，保留用户当次拖动）
+    const p = db.getProfile()
+    this.simIncome = +p.income || 25000
+    this.simRate = +p.saveRate || 32
+    this.simHouseWan = Math.round((+p.housePrice || 3200000) / 10000)
     uni.$on('lp:data-restored', this.onDataRestored)
     this.refresh()
   },

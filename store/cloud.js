@@ -58,9 +58,11 @@ function messageFor(code, ctx) {
   return '云端服务异常，请稍后再试'
 }
 /** 统一请求：注入鉴权头，统一映射网络/HTTP 错误为 {code, status, message} */
-function request(method, path, data, ctx) {
+function request(method, path, data, ctx, tokenOverride) {
   const cfg = getConfig()
-  if (!cfg.token) return Promise.reject({ code: 'noToken', message: '请先配置同步' })
+  // tokenOverride 供「测试连接」在保存前校验，无需落盘即可验证
+  const token = tokenOverride || cfg.token
+  if (!token) return Promise.reject({ code: 'noToken', message: '请先配置同步' })
   return new Promise((resolve, reject) => {
     uni.request({
       url: API + path,
@@ -68,7 +70,7 @@ function request(method, path, data, ctx) {
       data,
       timeout: 15000,
       header: {
-        'Authorization': 'Bearer ' + cfg.token,
+        'Authorization': 'Bearer ' + token,
         'Accept': 'application/vnd.github+json',
         'Content-Type': 'application/json'
       },
@@ -114,9 +116,13 @@ function discoverGist() {
     return hit ? hit.id : null
   })
 }
-/** 测试连接：仅验证 token 有效且有 gist 权限，无副作用 */
+/** 测试连接：仅验证 token 有效且有 gist 权限，无副作用（读取已存配置） */
 function testConnection() {
   return request('GET', '/gists?per_page=1', null, 'config').then(() => true)
+}
+/** 测试指定 token 是否有效（不读配置、不落盘，供设置面板在保存前校验） */
+function testToken(token) {
+  return request('GET', '/gists?per_page=1', null, 'config', token).then(() => true)
 }
 /** 确保有 gistId：已有则直接返回，否则按描述自动发现并回填 */
 function ensureGistId() {
@@ -203,7 +209,7 @@ function startAutoPush() {
 export default {
   getConfig, saveConfig, clearConfig, hasToken, isConfigured,
   encrypt, decrypt,
-  testConnection, discoverGist,
+  testConnection, testToken, discoverGist,
   push, pull, restoreFromCloud,
   autoSyncOnLaunch, startAutoPush
 }

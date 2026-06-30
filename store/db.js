@@ -122,6 +122,21 @@ function deleteCheckin(id) {
   cache.checkins = cache.checkins.filter(c => c.id !== id)
   save()
 }
+/**
+ * 更新一条打卡记录的可编辑字段（金额/账户/类别/备注/日期）。
+ * 不改 id；账户余额由打卡累计派生，编辑后自动重算，严守 SSOT 不变量。
+ */
+function updateCheckin(id, patch) {
+  const c = cache.checkins.find(x => x.id === id)
+  if (!c) return null
+  if (patch.amount !== undefined) c.amount = +patch.amount || 0
+  if (patch.account !== undefined) c.account = patch.account
+  if (patch.category !== undefined) c.category = patch.category || '月度储蓄'
+  if (patch.note !== undefined) c.note = patch.note || ''
+  if (patch.date !== undefined) c.date = patch.date
+  save()
+  return c
+}
 function resetData() { cache = seed(); save(); return cache }
 
 /* ============ 快照导入导出（云端同步用）============ */
@@ -239,11 +254,10 @@ function netWorthSeries(n) {
   const arr = []
   for (let k = n - 1; k >= 0; k--) {
     const d = new Date(now.getFullYear(), now.getMonth() - k, 1)
-    const yy = d.getFullYear()
-    const mm = d.getMonth() + 1
-    const monthEnd = yy + '-' + pad(mm) + '-31'
-    const cum = cache.checkins.filter(c => c.date && c.date <= monthEnd).reduce((s, c) => s + (+c.amount || 0), 0)
-    arr.push({ label: (mm) + '月', value: openingsTotal + cum })
+    // 用「年-月」字符串比较，规避月末拼 '-31' 在 2 月/小月的隐患
+    const monthKey = d.getFullYear() + '-' + pad(d.getMonth() + 1)
+    const cum = cache.checkins.filter(c => c.date && c.date.slice(0, 7) <= monthKey).reduce((s, c) => s + (+c.amount || 0), 0)
+    arr.push({ label: (d.getMonth() + 1) + '月', value: openingsTotal + cum })
   }
   return arr
 }
@@ -265,17 +279,19 @@ function latestAllocation() {
 /** 历史记录（倒序，带各账户当时余额） */
 function history() {
   const byDateDesc = (a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : 0
+  // 用局部 Map 记录每条记录当时的账户余额，不再原地写 c._bal（避免污染 cache）
+  const balMap = new Map()
   cache.accounts.forEach(a => {
     const list = cache.checkins.filter(c => c.account === a.id).slice().sort((x, y) => x.date < y.date ? -1 : x.date > y.date ? 1 : 0)
     let bal = +a.opening || 0
-    list.forEach(c => { bal += +c.amount || 0; c._bal = bal })
+    list.forEach(c => { bal += +c.amount || 0; balMap.set(c.id, bal) })
   })
   return cache.checkins.slice().sort(byDateDesc).map(c => {
     const acc = cache.accounts.find(a => a.id === c.account) || {}
     return {
       id: c.id, date: c.date, accountId: c.account,
       accountName: acc.name || c.account, color: acc.color || 'accent',
-      amount: +c.amount || 0, balance: c._bal || 0,
+      amount: +c.amount || 0, balance: balMap.get(c.id) || 0,
       category: c.category || '', note: c.note || ''
     }
   })
@@ -290,7 +306,7 @@ export default {
   load, save, resetData,
   getProfile, saveProfile,
   getAccounts, saveAccounts,
-  getCheckins, addCheckin, deleteCheckin,
+  getCheckins, addCheckin, deleteCheckin, updateCheckin,
   getSnapshot, restoreSnapshot, onChange,
   accountBalance, netWorth, monthTotal, yearTotal, avgMonthly,
   monthlyStatus, currentStreak, goals, goalProgress,

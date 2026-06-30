@@ -3,11 +3,11 @@
     <view class="cs-overlay" :class="{ show: visible }" @click="close"></view>
     <view class="cs-sheet" :class="{ show: visible }">
       <view class="cs-handle"></view>
-      <view class="cs-title">存钱打卡</view>
-      <view class="cs-sub">{{ todayLabel }} · 目标 {{ fmtFull(target) }} 元</view>
+      <view class="cs-title">编辑记录</view>
+      <view class="cs-sub">{{ date }} · {{ accountName }}</view>
 
       <view class="cs-group">
-        <view class="cs-label">存入金额</view>
+        <view class="cs-label">金额</view>
         <view class="cs-input-row">
           <text class="cs-prefix">¥</text>
           <input class="cs-input" type="number" v-model="amount" placeholder="输入金额" />
@@ -58,8 +58,10 @@
         </picker>
       </view>
 
-      <button class="cs-submit" @click="submit(false)">确认存入 {{ fmtFull(+amount || 0) }} 元</button>
-      <view class="cs-again" @click="submit(true)">存完再记一笔</view>
+      <view class="es-btn-row">
+        <button class="es-del" @click="remove">删除</button>
+        <button class="cs-submit es-save" @click="save">保存修改</button>
+      </view>
     </view>
   </view>
 </template>
@@ -69,38 +71,41 @@ import db from '../store/db.js'
 import calc from '../utils/calc.js'
 
 export default {
-  name: 'CheckinSheet',
+  name: 'EditSheet',
   props: {
-    visible: { type: Boolean, default: false }
+    visible: { type: Boolean, default: false },
+    // 待编辑记录（来自 db.history() 的项：含 id/accountId/date/amount/category/note）
+    record: { type: Object, default: () => ({}) }
   },
-  emits: ['close', 'saved'],
+  emits: ['close', 'saved', 'deleted'],
   data() {
     return {
+      id: '',
       amount: '',
       selected: 'down',
-      date: this.todayStr(),
       category: '月度储蓄',
       note: '',
+      date: this.todayStr(),
       accounts: db.getAccounts(),
       categories: ['月度储蓄', '定投', '奖金', '其他']
     }
   },
   computed: {
-    target() { return db.getProfile().monthlyTarget || 8000 },
-    todayLabel() {
-      const d = new Date()
-      return d.getFullYear() + '年' + (d.getMonth() + 1) + '月'
+    accountName() {
+      const a = this.accounts.find(x => x.id === this.selected)
+      return a ? a.name : ''
     }
   },
   watch: {
     visible(v) {
-      if (v) {
-        // 每次打开重置为当前目标金额
-        this.amount = String(this.target)
-        this.selected = 'down'
-        this.date = this.todayStr()
-        this.category = '月度储蓄'
-        this.note = ''
+      // 打开时按传入记录回填各字段
+      if (v && this.record && this.record.id) {
+        this.id = this.record.id
+        this.amount = String(this.record.amount || '')
+        this.selected = this.record.accountId || this.record.account || 'down'
+        this.category = this.record.category || '月度储蓄'
+        this.note = this.record.note || ''
+        this.date = this.record.date || this.todayStr()
         this.accounts = db.getAccounts()
       }
     }
@@ -122,29 +127,41 @@ export default {
       return { borderColor: 'var(--border)' }
     },
     close() { this.$emit('close') },
-    submit(keepOpen) {
+    save() {
       const amt = +this.amount || 0
       if (amt <= 0) {
         uni.showToast({ title: '请输入金额', icon: 'none' })
         return
       }
-      db.addCheckin({ date: this.date, account: this.selected, amount: amt, category: this.category, note: this.note })
+      // 编辑不改 opening，余额由打卡累计自动派生，严守 SSOT
+      db.updateCheckin(this.id, { date: this.date, account: this.selected, amount: amt, category: this.category, note: this.note })
       uni.vibrateShort()
-      uni.showToast({ title: '打卡成功', icon: 'success' })
+      uni.showToast({ title: '已保存', icon: 'success' })
       this.$emit('saved')
-      if (keepOpen) {
-        // 保留面板、清空金额与备注，便于连续记多笔
-        this.amount = ''
-        this.note = ''
-      } else {
-        this.$emit('close')
-      }
+      this.$emit('close')
+    },
+    remove() {
+      uni.showModal({
+        title: '删除记录',
+        content: '确定删除这条 ' + fmtFull(+this.amount || 0) + ' 元记录？',
+        confirmColor: '#e5484d',
+        success: r => {
+          if (r.confirm) {
+            db.deleteCheckin(this.id)
+            uni.vibrateShort()
+            uni.showToast({ title: '已删除', icon: 'none' })
+            this.$emit('deleted')
+            this.$emit('close')
+          }
+        }
+      })
     }
   }
 }
 </script>
 
 <style scoped>
+/* 弹层骨架复用 checkin-sheet 的 .cs-* 体系（scoped 需各自定义）*/
 .cs-overlay {
   position: fixed; left: 0; top: 0; right: 0; bottom: 0;
   background: rgba(0,0,0,0.4);
@@ -181,18 +198,6 @@ export default {
 }
 .cs-cat-ico { display: block; font-size: 40rpx; margin-bottom: 8rpx; }
 .cs-cat-name { font-size: 22rpx; font-weight: 700; color: var(--fg); }
-.cs-date {
-  height: 88rpx; line-height: 88rpx; padding: 0 24rpx;
-  border: 4rpx solid var(--border); border-radius: 24rpx;
-  font-size: 32rpx; font-weight: 700; color: var(--fg-strong);
-}
-.cs-submit {
-  width: 100%; height: 104rpx; line-height: 104rpx;
-  margin-top: 40rpx; border-radius: 24rpx; border: 0;
-  background: var(--accent); color: #fff;
-  font-size: 32rpx; font-weight: 700;
-}
-.cs-submit::after { border: none; }
 
 /* 类别 chip */
 .cs-cat-tag {
@@ -208,6 +213,26 @@ export default {
   padding: 0 24rpx; font-size: 28rpx; color: var(--fg-strong); background: var(--surface);
 }
 
-/* 再记一笔 */
-.cs-again { text-align: center; margin-top: 24rpx; font-size: 26rpx; font-weight: 600; color: var(--muted); }
+.cs-date {
+  height: 88rpx; line-height: 88rpx; padding: 0 24rpx;
+  border: 4rpx solid var(--border); border-radius: 24rpx;
+  font-size: 32rpx; font-weight: 700; color: var(--fg-strong);
+}
+.cs-submit {
+  height: 104rpx; line-height: 104rpx;
+  border-radius: 24rpx; border: 0;
+  background: var(--accent); color: #fff;
+  font-size: 32rpx; font-weight: 700;
+}
+.cs-submit::after { border: none; }
+
+/* 按钮行：删除 + 保存 */
+.es-btn-row { display: flex; gap: 20rpx; margin-top: 40rpx; }
+.es-del {
+  flex: 1; height: 104rpx; line-height: 104rpx; border-radius: 24rpx;
+  border: 2rpx solid var(--danger); background: var(--surface); color: var(--danger);
+  font-size: 30rpx; font-weight: 700;
+}
+.es-del::after { border: none; }
+.es-save { flex: 2; }
 </style>

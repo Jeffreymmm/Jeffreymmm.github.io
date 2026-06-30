@@ -113,23 +113,27 @@
         </view>
       </view>
 
-      <!-- 历史记录 -->
+      <!-- 历史记录（按月分组，支持编辑） -->
       <view class="card">
         <text class="card-title">存款记录（{{ history.length }} 笔）</text>
-        <view class="hist-row" v-for="h in history" :key="h.id">
-          <view class="hist-dot" :style="{ background: colorVar(h.color) }"></view>
-          <view class="hist-main">
-            <view class="hist-line1">
-              <text class="hist-cat">{{ h.category || '打卡' }} · {{ h.accountName }}</text>
-              <text class="hist-amt font-num" style="color:var(--success)">+{{ fmtFull(h.amount) }}</text>
+        <view v-for="g in groupedHistory" :key="g.key" class="hist-group">
+          <view class="hist-group-label">{{ g.label }}</view>
+          <view class="hist-row" v-for="h in g.items" :key="h.id">
+            <view class="hist-dot" :style="{ background: colorVar(h.color) }"></view>
+            <view class="hist-main">
+              <view class="hist-line1">
+                <text class="hist-cat">{{ h.category || '打卡' }} · {{ h.accountName }}<text v-if="h.note" class="hist-note"> / {{ h.note }}</text></text>
+                <text class="hist-amt font-num" style="color:var(--success)">+{{ fmtFull(h.amount) }}</text>
+              </view>
+              <view class="hist-line2">
+                <text class="hist-date">{{ h.date }}</text>
+                <text class="hist-bal font-num">余额 {{ fmtFull(h.balance) }}</text>
+              </view>
             </view>
-            <view class="hist-line2">
-              <text class="hist-date">{{ h.date }}</text>
-              <text class="hist-bal font-num">余额 {{ fmtFull(h.balance) }}</text>
-            </view>
+            <text class="hist-edit" @click="editRecord(h)">✎</text>
           </view>
-          <text class="hist-del" @click="del(h)">✕</text>
         </view>
+        <view v-if="hasMore" class="load-more" @click="loadMore">加载更多（剩 {{ history.length - visibleCount }} 笔）</view>
         <view v-if="!history.length" class="empty">暂无记录，点右上角"记一笔"</view>
       </view>
 
@@ -138,6 +142,7 @@
 
     <bottom-nav active="savings" @checkin="sheet = true" />
     <checkin-sheet :visible="sheet" @close="sheet = false" @saved="onSaved" />
+    <edit-sheet :visible="editSheet" :record="editTarget" @close="editSheet = false" @saved="onEdited" @deleted="onEdited" />
   </view>
 </template>
 
@@ -147,9 +152,10 @@ import calc from '../../utils/calc.js'
 import ProgressRing from '../../components/progress-ring.vue'
 import BottomNav from '../../components/bottom-nav.vue'
 import CheckinSheet from '../../components/checkin-sheet.vue'
+import EditSheet from '../../components/edit-sheet.vue'
 
 export default {
-  components: { ProgressRing, BottomNav, CheckinSheet },
+  components: { ProgressRing, BottomNav, CheckinSheet, EditSheet },
   data() {
     return {
       statusBarHeight: 20,
@@ -173,11 +179,30 @@ export default {
       trend: [],
       history: [],
       currentYear: new Date().getFullYear(),
-      trendMax: 1
+      trendMax: 1,
+      editSheet: false,
+      editTarget: {},
+      visibleCount: 20
     }
   },
   computed: {
-    allocTotal() { return this.alloc.reduce((s, a) => s + a.amount, 0) }
+    allocTotal() { return this.alloc.reduce((s, a) => s + a.amount, 0) },
+    visibleHistory() { return this.history.slice(0, this.visibleCount) },
+    // 按年-月分组（history 已倒序，最新月份在前）
+    groupedHistory() {
+      const groups = []
+      let cur = null
+      this.visibleHistory.forEach(h => {
+        const key = (h.date || '').slice(0, 7)
+        if (!cur || cur.key !== key) {
+          cur = { key, label: this.monthLabel(key), items: [] }
+          groups.push(cur)
+        }
+        cur.items.push(h)
+      })
+      return groups
+    },
+    hasMore() { return this.visibleCount < this.history.length }
   },
   onLoad() {
     try { this.statusBarHeight = uni.getSystemInfoSync().statusBarHeight || 20 } catch (e) {}
@@ -194,15 +219,14 @@ export default {
       if (this.trendMax <= 0) return 0
       return Math.max(8, Math.round(v / this.trendMax * 100))
     },
-    del(h) {
-      uni.showModal({
-        title: '删除记录',
-        content: '确定删除 ' + h.date + ' 的 ' + fmtFull(h.amount) + ' 元记录？',
-        success: r => {
-          if (r.confirm) { db.deleteCheckin(h.id); this.refresh(); uni.showToast({ title: '已删除', icon: 'none' }) }
-        }
-      })
+    monthLabel(key) {
+      if (!key) return '未知'
+      const parts = key.split('-')
+      return parts[0] + '年' + (+parts[1] || 0) + '月'
     },
+    loadMore() { this.visibleCount += 20 },
+    editRecord(h) { this.editTarget = h; this.editSheet = true },
+    onEdited() { this.editSheet = false; this.refresh() },
     refresh() {
       const now = new Date()
       const cy = now.getFullYear()
@@ -233,12 +257,10 @@ export default {
       this.alloc = db.latestAllocation()
       this.trend = db.netWorthSeries(6)
       this.trendMax = Math.max.apply(null, this.trend.map(t => t.value)) || 1
-      this.history = db.history().slice(0, 50)
+      this.history = db.history()
     }
   }
 }
-
-function fmtFull(n) { return Math.round(n).toLocaleString('zh-CN') }
 </script>
 
 <style scoped>
@@ -332,6 +354,13 @@ function fmtFull(n) { return Math.round(n).toLocaleString('zh-CN') }
 .hist-line2 { display: flex; justify-content: space-between; margin-top: 6rpx; }
 .hist-date { font-size: 22rpx; color: var(--muted); }
 .hist-bal { font-size: 22rpx; color: var(--muted); }
-.hist-del { width: 56rpx; height: 56rpx; line-height: 56rpx; text-align: center; color: var(--muted-2); font-size: 28rpx; }
+.hist-edit { width: 56rpx; height: 56rpx; line-height: 56rpx; text-align: center; color: var(--muted-2); font-size: 32rpx; }
+
+/* 按月分组 */
+.hist-group { margin-top: 12rpx; }
+.hist-group:first-of-type { margin-top: 0; }
+.hist-group-label { font-size: 24rpx; font-weight: 700; color: var(--muted); padding: 16rpx 0 4rpx; }
+.hist-note { color: var(--muted-2); font-weight: 400; }
+.load-more { text-align: center; color: var(--accent); font-size: 26rpx; font-weight: 600; padding: 28rpx 0 8rpx; }
 .empty { text-align: center; color: var(--muted); font-size: 26rpx; padding: 40rpx 0; }
 </style>

@@ -76,16 +76,29 @@
       <!-- 数据管理 -->
       <view class="card">
         <text class="card-title">数据管理</text>
+        <view class="dm-row" @click="exportData">
+          <text class="dm-name-normal">导出备份（复制到剪贴板）</text>
+          <text class="dm-arrow">›</text>
+        </view>
+        <view class="dm-row" @click="importData">
+          <text class="dm-name-normal">导入恢复（从剪贴板）</text>
+          <text class="dm-arrow">›</text>
+        </view>
         <view class="dm-row" @click="reset">
           <text class="dm-name">重置全部数据</text>
           <text class="dm-arrow">›</text>
         </view>
-        <view class="dm-tip">数据均保存在本机（离线），重置后恢复演示种子数据。</view>
+        <view class="dm-tip">数据均保存在本机（离线）。导出可将数据复制到剪贴板便于备份，重置后恢复演示种子数据。</view>
       </view>
 
       <!-- 云同步 -->
       <view class="card">
         <text class="card-title">云同步</text>
+        <view class="sync-status">
+          <text class="sync-dot" :class="cloudConfigured ? 'on' : 'off'"></text>
+          <text class="sync-status-text">{{ cloudConfigured ? '已配置' : '未配置' }}</text>
+          <text v-if="lastSyncLabel" class="sync-status-time">· 上次同步 {{ lastSyncLabel }}</text>
+        </view>
         <view class="dm-row" @click="openSyncSheet">
           <text class="dm-name-normal">同步设置</text>
           <text class="dm-arrow">›</text>
@@ -130,6 +143,8 @@ export default {
       statusBarHeight: 20,
       sheet: false,
       syncSheet: false,
+      cloudConfigured: false,
+      lastSyncLabel: '',
       form: {},
       accounts: []
     }
@@ -140,6 +155,7 @@ export default {
   onShow() {
     this.form = Object.assign({}, db.getProfile())
     this.loadAccounts()
+    this.refreshSyncStatus()
   },
   methods: {
     fmtFull: calc.fmtFull,
@@ -177,9 +193,58 @@ export default {
         }
       })
     },
+    // 导出全部数据到剪贴板（JSON），便于离线备份 / 换机迁移
+    exportData() {
+      const json = JSON.stringify(db.getSnapshot())
+      uni.setClipboardData({
+        data: json,
+        success: () => uni.showToast({ title: '已复制到剪贴板', icon: 'success' }),
+        fail: () => uni.showToast({ title: '复制失败', icon: 'none' })
+      })
+    },
+    // 从剪贴板 JSON 恢复（覆盖本机）
+    importData() {
+      uni.getClipboardData({
+        success: r => {
+          let snapshot = null
+          try { snapshot = JSON.parse((r && r.data) || '') } catch (e) { snapshot = null }
+          if (!snapshot || typeof snapshot !== 'object') {
+            uni.showToast({ title: '剪贴板无有效备份', icon: 'none' })
+            return
+          }
+          uni.showModal({
+            title: '导入恢复',
+            content: '将用剪贴板数据覆盖本机，确定？',
+            confirmColor: '#e5484d',
+            success: m => {
+              if (!m.confirm) return
+              try {
+                db.restoreSnapshot(snapshot)
+                this.refreshFromDb()
+                uni.showToast({ title: '已恢复', icon: 'success' })
+              } catch (e) {
+                uni.showToast({ title: (e && e.message) || '导入失败', icon: 'none' })
+              }
+            }
+          })
+        },
+        fail: () => uni.showToast({ title: '读取剪贴板失败', icon: 'none' })
+      })
+    },
     // ===== 云同步 =====
+    refreshSyncStatus() {
+      this.cloudConfigured = cloud.isConfigured()
+      this.lastSyncLabel = this.fmtSyncTime(cloud.getConfig().lastSyncedAt)
+    },
+    fmtSyncTime(iso) {
+      if (!iso) return ''
+      const d = new Date(iso)
+      if (isNaN(d.getTime())) return ''
+      const p = n => (n < 10 ? '0' + n : '' + n)
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes())
+    },
     openSyncSheet() { this.syncSheet = true },
-    onSyncSaved() { this.syncSheet = false },
+    onSyncSaved() { this.syncSheet = false; this.refreshSyncStatus() },
     // 重读本机数据（云恢复后刷新当前页展示）
     refreshFromDb() {
       this.form = Object.assign({}, db.getProfile())
@@ -195,6 +260,7 @@ export default {
       cloud.push().then(() => {
         uni.hideLoading()
         uni.showToast({ title: '已上传', icon: 'success' })
+        this.refreshSyncStatus()
       }).catch(e => {
         uni.hideLoading()
         this.showCloudError(e)
@@ -221,6 +287,7 @@ export default {
             } else {
               uni.showToast({ title: '云端无更新', icon: 'none' })
             }
+            this.refreshSyncStatus()
           }).catch(e => {
             uni.hideLoading()
             this.showCloudError(e)
@@ -237,6 +304,7 @@ export default {
           if (r.confirm) {
             cloud.clearConfig()
             uni.showToast({ title: '已清除', icon: 'success' })
+            this.refreshSyncStatus()
           }
         }
       })
@@ -292,6 +360,14 @@ export default {
 .dm-name-normal { font-size: 28rpx; font-weight: 600; color: var(--fg-strong); }
 .dm-arrow { font-size: 36rpx; color: var(--muted-2); }
 .dm-tip { font-size: 22rpx; color: var(--muted); line-height: 1.5; }
+
+/* 云同步状态条 */
+.sync-status { display: flex; align-items: center; gap: 12rpx; margin: 16rpx 0 8rpx; font-size: 24rpx; }
+.sync-dot { width: 16rpx; height: 16rpx; border-radius: 50%; }
+.sync-dot.on { background: var(--success); }
+.sync-dot.off { background: var(--muted-2); }
+.sync-status-text { font-weight: 700; color: var(--fg-strong); }
+.sync-status-time { color: var(--muted); }
 
 .about { text-align: center; font-size: 22rpx; color: var(--muted-2); margin-top: 16rpx; }
 </style>

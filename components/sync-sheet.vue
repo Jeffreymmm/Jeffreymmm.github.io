@@ -64,15 +64,15 @@ export default {
   methods: {
     close() { this.$emit('close') },
     testConn() {
-      if (!this.token || !this.token.trim()) {
+      const token = (this.token || '').trim()
+      if (!token) {
         uni.showToast({ title: '请填写 Token', icon: 'none' })
         return
       }
-      // 先存入输入的 token，request 依赖 getConfig().token
-      cloud.saveConfig({ token: this.token.trim(), gistId: (this.gistId || '').trim() })
       this.testing = true
       uni.showLoading({ title: '测试中...', mask: true })
-      cloud.testConnection().then(() => {
+      // 仅校验 token，不落盘；配置统一由「保存配置」按钮写入
+      cloud.testToken(token).then(() => {
         uni.hideLoading()
         uni.showToast({ title: '连接正常', icon: 'success' })
       }).catch(e => {
