@@ -23,8 +23,8 @@
           <text class="kpi-delta" :style="{ color: summary.mortgagePct > 45 ? 'var(--danger)' : summary.mortgagePct > 40 ? 'var(--warm)' : 'var(--success)' }">占收入 {{ summary.mortgagePct.toFixed(1) }}%</text>
         </view>
         <view class="kpi">
-          <text class="kpi-label">育儿首年</text>
-          <text class="kpi-value font-num">{{ fmt(summary.babyFirstYear) }}<text class="u"></text></text>
+          <text class="kpi-label">育儿月均</text>
+          <text class="kpi-value font-num">{{ fmtFull(summary.babyMonthly06) }}<text class="u">元</text></text>
         </view>
       </view>
 
@@ -123,7 +123,7 @@
       <!-- 生娃规划 -->
       <view class="card">
         <view class="card-title">生娃规划</view>
-        <view class="card-sub">攒够启动资金即可执行生育计划</view>
+        <view class="card-sub">攒够孕产现金即可启动，后续靠月度育儿储蓄覆盖</view>
 
         <!-- 启动资金门槛 -->
         <view class="baby-launch">
@@ -132,8 +132,9 @@
             <text class="baby-launch-val font-num">{{ fmt(baby.launchTarget) }}<text class="u">元</text></text>
           </view>
           <view class="baby-launch-break">
-            <text>首年育儿 {{ fmt(baby.firstYear) }}</text>
-            <text>＋ 产后缓冲 {{ fmt(baby.buffer) }}</text>
+            <text>产检 {{ fmt(baby.pregnancyBreakdown.checkup) }}</text>
+            <text>＋ 分娩 {{ fmt(baby.pregnancyBreakdown.delivery) }}</text>
+            <text>＋ 月子 {{ fmt(baby.pregnancyBreakdown.yuesao) }}</text>
           </view>
         </view>
 
@@ -141,6 +142,27 @@
         <view class="slider-field">
           <view class="slider-head"><text>每月育儿储蓄</text><text class="slider-val">{{ fmtFull(form.babySave) }} 元</text></view>
           <slider :min="500" :max="8000" :step="500" :value="form.babySave" @changing="form.babySave = $event.detail.value" />
+        </view>
+
+        <!-- 0-6 岁花销预测柱图 -->
+        <view class="baby-chart-wrap">
+          <view class="slider-head">
+            <text>0-6 岁花销预测</text>
+            <text class="slider-val">月均 {{ fmtFull(baby.cashflow.monthlyCost) }} 元</text>
+          </view>
+          <view class="baby-chart">
+            <view class="ref-line" :style="{ bottom: saveLinePct + '%' }"><text class="ref-label">月存</text></view>
+            <view class="bar-col" v-for="(y, i) in baby.profile06.yearly" :key="i">
+              <text class="bar-val font-num">{{ fmt(y.monthlyAvg) }}</text>
+              <view class="bar-track"><view class="bar" :style="{ height: barPct(y.monthlyAvg) + '%', background: stageColor(y.stage) }"></view></view>
+              <text class="bar-label">{{ y.age }}</text>
+            </view>
+          </view>
+          <view class="chart-legend">
+            <view class="legend-item"><view class="dot infant"></view><text>婴儿期</text></view>
+            <view class="legend-item"><view class="dot toddler"></view><text>幼儿期</text></view>
+            <view class="legend-item"><view class="dot preschool"></view><text>学前</text></view>
+          </view>
         </view>
 
         <!-- 三指标 -->
@@ -159,9 +181,9 @@
           </view>
         </view>
 
-        <!-- 状态横幅 -->
-        <view class="insight" :class="baby.status === 'onTrack' ? 'ok' : 'warn'">
-          <text class="insight-icon">{{ baby.status === 'onTrack' ? '✓' : '⚠️' }}</text>
+        <!-- 状态横幅：启动资金就绪 且 月存覆盖月均支出 才绿，否则黄 -->
+        <view class="insight" :class="baby.status === 'onTrack' && baby.cashflow.covered ? 'ok' : 'warn'">
+          <text class="insight-icon">{{ baby.status === 'onTrack' && baby.cashflow.covered ? '✓' : '⚠️' }}</text>
           <text class="insight-text">{{ babyInsight }}</text>
         </view>
 
@@ -251,11 +273,19 @@ export default {
       return calc.milestoneOrder(this.baby, this.summary, this.form)
     },
     babyInsight() {
-      const b = this.baby
-      if (b.status === 'onTrack') {
-        return '资金在计划内就绪，预计 ' + b.readyAge.toFixed(0) + ' 岁可启动生育计划，节奏从容。'
+      const b = this.baby, c = b.cashflow
+      if (b.status === 'onTrack' && c.covered) {
+        return '孕产现金 ' + b.readyAge.toFixed(0) + ' 岁就绪，月存 ' + calc.fmtFull(c.monthlySave) + ' 元可覆盖 0-6 岁月均支出，节奏从容。'
       }
-      return '按当前月存节奏，资金落后计划 ' + b.gap.toFixed(1) + ' 年才就绪（' + b.readyAge.toFixed(0) + ' 岁）。建议加码每月育儿储蓄，或把计划顺延 ' + Math.ceil(b.gap) + ' 年。'
+      if (b.status === 'onTrack' && !c.covered) {
+        return '启动资金 ' + b.readyAge.toFixed(0) + ' 岁就绪，但月存比月均支出少 ' + calc.fmtFull(c.monthlyGap) + ' 元，现有储备可撑 ' + (c.runwayMonths ? Math.round(c.runwayMonths) : 0) + ' 个月，建议逐步加码月存。'
+      }
+      return '启动资金落后计划 ' + b.gap.toFixed(1) + ' 年（' + b.readyAge.toFixed(0) + ' 岁就绪）；月存比月均支出少 ' + calc.fmtFull(c.monthlyGap) + ' 元，建议加码每月育儿储蓄。'
+    },
+    saveLinePct() {
+      // 虚线高度 = 当前月存 / 峰值月均，与柱子同基准归一化；调滑块时实时移动
+      const peak = this.baby.profile06.peakMonthly || 1
+      return Math.min(100, Math.max(0, (+this.form.babySave || 0) / peak * 100))
     },
     orderLabel() {
       return { babyFirst: '先生后买', buyFirst: '先买后生', parallel: '同步推进' }[this.order.order] || ''
@@ -303,7 +333,7 @@ export default {
       const f = this.form
       return [
         { age: '现在 · ' + f.age + '岁', event: '月存 ' + calc.fmtFull(s.monthlySave) + ' 元', amt: '累计 ' + calc.fmt(+f.savings || 0), color: 'accent' },
-        { age: (f.babyYear || 0) + '年后 · ' + (+f.age + (f.babyYear || 0)) + '岁', event: '生育计划', amt: '首年育儿约 ' + calc.fmt(s.babyFirstYear), color: 'warm' },
+        { age: (f.babyYear || 0) + '年后 · ' + (+f.age + (f.babyYear || 0)) + '岁', event: '生育计划', amt: '孕产启动约 ' + calc.fmt(this.baby.launchTarget), color: 'warm' },
         { age: s.timeToSave.toFixed(1) + '年后 · ' + s.houseAge.toFixed(1) + '岁', event: '购房目标', amt: '首付 ' + calc.fmt(s.downAmt) + ' · 月供 ' + calc.fmtFull(s.mortgage), color: 'success' },
         { age: (s.timeToSave + (+f.years || 30)).toFixed(0) + '年后', event: '房贷还清', amt: '迈向财务自由', color: 'muted-2' }
       ]
@@ -320,6 +350,14 @@ export default {
     save() {
       db.saveProfile(this.form)
       uni.showToast({ title: '方案已保存', icon: 'success' })
+    },
+    barPct(v) {
+      const peak = this.baby.profile06.peakMonthly
+      if (!peak || peak <= 0) return 0
+      return Math.max(8, Math.round(v / peak * 100))
+    },
+    stageColor(stage) {
+      return { infant: 'var(--warm)', toddler: 'var(--warm-light)', preschool: 'var(--info)' }[stage] || 'var(--warm)'
     }
   }
 }
@@ -418,4 +456,21 @@ export default {
 .bo-cf-label { color: var(--muted); }
 .bo-cf-val { color: var(--fg-strong); font-weight: 700; }
 .bo-cf-health { font-weight: 800; }
+
+/* 0-6 岁花销柱图 */
+.baby-chart-wrap { margin: 8rpx 0 24rpx; }
+.baby-chart { display: flex; align-items: flex-end; gap: 16rpx; height: 320rpx; padding-top: 20rpx; position: relative; }
+.ref-line { position: absolute; left: 0; right: 0; height: 0; border-top: 2rpx dashed var(--accent); z-index: 2; }
+.ref-label { position: absolute; right: 0; top: -28rpx; font-size: 18rpx; color: var(--accent); background: var(--surface); padding: 0 8rpx; font-weight: 700; }
+.bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8rpx; height: 100%; justify-content: flex-end; }
+.bar-val { font-size: 18rpx; font-weight: 700; color: var(--fg-strong); }
+.bar-track { width: 100%; max-width: 80rpx; flex: 1; display: flex; align-items: flex-end; }
+.bar { width: 100%; border-radius: 8rpx 8rpx 0 0; min-height: 16rpx; }
+.bar-label { font-size: 18rpx; color: var(--muted); }
+.chart-legend { display: flex; gap: 24rpx; margin-top: 16rpx; }
+.legend-item { font-size: 22rpx; color: var(--muted); display: flex; align-items: center; gap: 8rpx; }
+.dot { width: 20rpx; height: 20rpx; border-radius: 6rpx; display: inline-block; }
+.dot.infant { background: var(--warm); }
+.dot.toddler { background: var(--warm-light); }
+.dot.preschool { background: var(--info); }
 </style>

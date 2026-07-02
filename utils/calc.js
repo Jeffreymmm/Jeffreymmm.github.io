@@ -41,17 +41,24 @@ function timeToSave(target, current, monthlySave, annualReturnPct) {
 }
 
 /**
+ * 育儿成本基准表（年度额度；0-3 岁项 supplies03/earlyEdu/medical03 也是每年额度，
+ * 0-3 岁累计需 ×3，见 babyCosts.yr03）。
+ * 提取为模块常量，供 babyCosts 与 babyMonthlyProfile 共享，避免额度重复定义（DRY）。
+ */
+const BABY_BASE = {
+  pregnancy: 15000, delivery: 20000, yuesao: 30000,
+  milk0_1: 12000, milk1_3: 8000, supplies03: 10000, earlyEdu: 12000, medical03: 6000,
+  kinder: 12000, hobbies36: 6000,
+  primary: 3000, tutoring712: 10000, hobbies712: 8000,
+  middle: 5000, highSchool: 8000, tutoring1318: 18000, hobbies1318: 6000
+}
+
+/**
  * 育儿成本（移植自 baby 页，供后续"买房/育儿"模块复用）
  * cityFactor 城市系数(0.6/0.85/1.0/1.3) tier 精细度(0.7/1.0/1.4/2.0)
  */
 function babyCosts(cityFactor, tier) {
-  const base = {
-    pregnancy: 15000, delivery: 20000, yuesao: 30000,
-    milk0_1: 12000, milk1_3: 8000, supplies03: 10000, earlyEdu: 12000, medical03: 6000,
-    kinder: 12000, hobbies36: 6000,
-    primary: 3000, tutoring712: 10000, hobbies712: 8000,
-    middle: 5000, highSchool: 8000, tutoring1318: 18000, hobbies1318: 6000
-  }
+  const base = BABY_BASE
   const f = cityFactor * tier
   const pregnancy = (base.pregnancy + base.delivery + base.yuesao) * f
   const yr03 = (base.milk0_1 + base.milk1_3 * 2 + base.supplies03 * 3 + base.earlyEdu * 3 + base.medical03 * 3) * f
@@ -61,6 +68,37 @@ function babyCosts(cityFactor, tier) {
   const total = pregnancy + yr03 + yr36 + yr712 + yr1318
   const firstYear = pregnancy + 12000 * f + 10000 * f
   return { pregnancy, yr03, yr36, yr712, yr1318, total, firstYear, monthlyAvg: total / 18 / 12 }
+}
+
+/**
+ * 0-6 岁逐月花销剖面（供规划页柱图可视化，回答"月存能否覆盖各年龄段支出"）
+ * 复用 BABY_BASE 年度额度，按年拆月均，年内常数（KISS，不造季节性假设）。
+ * cityFactor 城市系数 tier 精细度
+ * 返回：monthly[72] / yearly[6]{age,stage,yearlyTotal,monthlyAvg} / monthlyAvg06 / peakMonthly / total06
+ */
+function babyMonthlyProfile(cityFactor, tier) {
+  const f = (+cityFactor || 1) * (+tier || 1)
+  const b = BABY_BASE
+  // 0-3 岁每年共享支出（用品+早教+医疗，均为年度额度）
+  const toddlerShared = b.supplies03 + b.earlyEdu + b.medical03
+  const raw = [
+    { age: '0-1岁', yearly: b.milk0_1 + toddlerShared, stage: 'infant' },
+    { age: '1-2岁', yearly: b.milk1_3 + toddlerShared, stage: 'toddler' },
+    { age: '2-3岁', yearly: b.milk1_3 + toddlerShared, stage: 'toddler' },
+    { age: '3-4岁', yearly: b.kinder + b.hobbies36, stage: 'preschool' },
+    { age: '4-5岁', yearly: b.kinder + b.hobbies36, stage: 'preschool' },
+    { age: '5-6岁', yearly: b.kinder + b.hobbies36, stage: 'preschool' }
+  ]
+  const yearly = raw.map(y => {
+    const yearlyTotal = y.yearly * f
+    return { age: y.age, stage: y.stage, yearlyTotal, monthlyAvg: yearlyTotal / 12 }
+  })
+  const total06 = yearly.reduce((s, y) => s + y.yearlyTotal, 0)
+  const peakMonthly = yearly.reduce((m, y) => Math.max(m, y.monthlyAvg), 0)
+  // 逐月序列（年内常数），共 72 个月
+  const monthly = []
+  yearly.forEach(y => { for (let i = 0; i < 12; i++) monthly.push(y.monthlyAvg) })
+  return { monthly, yearly, monthlyAvg06: total06 / 72, peakMonthly, total06 }
 }
 
 /**
@@ -78,7 +116,10 @@ function plannerSummary(profile, currentDownBalance) {
   const mortgage = monthlyMortgage(loan, +p.rate || 0, +p.years || 30)
   const mortgagePct = income > 0 ? mortgage / income * 100 : 0
   const toSave = timeToSave(downAmt, +currentDownBalance || 0, monthlySave, +p.investReturn || 0)
-  const baby = babyCosts(+p.cityFactor || 1, +p.babyTier || 1)
+  const cityFactor = +p.cityFactor || 1
+  const tier = +p.babyTier || 1
+  const baby = babyCosts(cityFactor, tier)
+  const babyMonthly06 = babyMonthlyProfile(cityFactor, tier).monthlyAvg06
   return {
     income, saveRate, monthlySave, yearlySave,
     downAmt, loan, mortgage, mortgagePct,
@@ -86,6 +127,7 @@ function plannerSummary(profile, currentDownBalance) {
     houseAge: (+p.age || 0) + toSave,
     babyTotal: baby.total,
     babyFirstYear: baby.firstYear,
+    babyMonthly06,
     healthScore: healthLevel(mortgagePct)
   }
 }
@@ -98,35 +140,58 @@ function healthLevel(mortgagePct) {
 }
 
 /**
- * 生娃节点规划（纯函数，三端通用）
- * 回答：「按当前节奏，多久能攒够生娃启动资金、是否赶上计划」
+ * 生娃节点规划（持续现金流模型，纯函数，三端通用）
+ * 回答：「多久攒够孕产启动现金」「生娃后月存能否覆盖 0-6 岁月均支出」
+ * 启动门槛只算孕产期必备现金（产检+分娩+月子，出生前后必须用现金支付）；
+ * 奶粉/用品/早教等持续性支出由生娃后月度育儿储蓄覆盖，不计入一次性门槛。
  * profile=用户参数 babyBalance=育儿账户当前余额 babyMonthlySave=每月育儿储蓄
  */
 function babyPlan(profile, babyBalance, babyMonthlySave) {
   const p = profile || {}
-  const income = +p.income || 0
   const age = +p.age || 0
   const investReturn = +p.investReturn || 0
   const babyYear = +p.babyYear || 0
+  const cityFactor = +p.cityFactor || 1
+  const tier = +p.babyTier || 1
+  const save = +babyMonthlySave || 0
+  const balance = +babyBalance || 0
   // 育儿成本（复用 babyCosts，一次取值）
-  const baby = babyCosts(+p.cityFactor || 1, +p.babyTier || 1)
-  // 产后收入缓冲：产假期间收入中断/下降，预留数月生活费
-  const bufferMonths = 6              // 缓冲月数
-  const bufferRate = 0.6              // 按月收入的 60% 估（基本生活费 + 收入缺口）
-  const buffer = income * bufferRate * bufferMonths
-  // 生娃启动资金门槛 = 首年育儿支出(含孕产) + 产后收入缓冲
-  const launchTarget = baby.firstYear + buffer
+  const baby = babyCosts(cityFactor, tier)
+  // 0-6 岁逐月剖面（供 UI 柱图）
+  const profile06 = babyMonthlyProfile(cityFactor, tier)
+  // 孕产期现金明细（产检/分娩/月子），用于启动门槛与 UI 拆解
+  const f = cityFactor * tier
+  const pregnancyBreakdown = {
+    checkup: BABY_BASE.pregnancy * f,
+    delivery: BABY_BASE.delivery * f,
+    yuesao: BABY_BASE.yuesao * f
+  }
+  // 启动门槛 = 孕产现金（不可分期）；持续支出由月存覆盖
+  const launchTarget = baby.pregnancy
   // 攒够启动资金所需年数（复用 timeToSave）
-  const yearsToReady = timeToSave(launchTarget, +babyBalance || 0, +babyMonthlySave || 0, investReturn)
+  const yearsToReady = timeToSave(launchTarget, balance, save, investReturn)
+  // 持续现金流：月存能否覆盖 0-6 岁月均育儿支出
+  const monthlyCost = profile06.monthlyAvg06
+  const monthlyGap = Math.max(0, monthlyCost - save)
+  const covered = save >= monthlyCost
+  const cashflow = {
+    monthlyCost,
+    monthlySave: save,
+    monthlyGap,
+    covered,
+    // 覆盖时无缺口，runway 无意义 → null（避免 Infinity 的 JSON 序列化与模板渲染问题）
+    runwayMonths: covered ? null : (monthlyGap > 0 ? balance / monthlyGap : 0)
+  }
   return {
     launchTarget,
-    firstYear: baby.firstYear,
-    buffer,
+    pregnancyBreakdown,
+    profile06,
+    cashflow,
     yearsToReady,
     readyAge: age + yearsToReady,
     gap: yearsToReady - babyYear,
     status: yearsToReady <= babyYear ? 'onTrack' : 'late',  // 计划内就绪 / 落后计划
-    monthlyAvg: baby.monthlyAvg
+    monthlyAvg: monthlyCost
   }
 }
 
@@ -173,4 +238,4 @@ function milestoneOrder(baby, summary, profile) {
   return { order, reason, postExpense, postPct, postHealth }
 }
 
-export default { fmt, fmtFull, monthlyMortgage, timeToSave, babyCosts, plannerSummary, healthLevel, babyPlan, milestoneOrder }
+export default { fmt, fmtFull, monthlyMortgage, timeToSave, babyCosts, babyMonthlyProfile, plannerSummary, healthLevel, babyPlan, milestoneOrder }

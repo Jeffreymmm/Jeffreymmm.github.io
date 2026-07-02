@@ -71,7 +71,6 @@ function seed() {
     investReturn: 3,
     babyTier: 1.0,
     monthlyTarget: 8000,
-    babyTarget: 130000,
     emergencyTarget: 60000,
     babySave: 1500
   }
@@ -234,10 +233,11 @@ function currentStreak() {
 function goals() {
   const p = cache.profile
   const sum = calc.plannerSummary(p, accountBalance('down'))
+  const baby = calc.babyPlan(p, accountBalance('baby'), +p.babySave || 1500)
   const nowY = new Date().getFullYear()
   return [
     { id: 'down', name: '购房首付', target: sum.downAmt || 960000, account: 'down', year: nowY + Math.ceil(sum.timeToSave || 0), color: 'accent' },
-    { id: 'baby', name: '育儿储备金', target: +p.babyTarget || sum.babyTotal || 130000, account: 'baby', year: nowY + Math.ceil(calc.babyPlan(p, accountBalance('baby'), +p.babySave || 1500).yearsToReady), color: 'warm' },
+    { id: 'baby', name: '育儿储备金', target: +p.babyTarget || baby.launchTarget, account: 'baby', year: nowY + Math.ceil(baby.yearsToReady), color: 'warm' },
     { id: 'emergency', name: '应急储备金', target: +p.emergencyTarget || 60000, account: 'emergency', year: null, color: 'success' }
   ]
 }
